@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# In[ ]:
 
 
 from utils import *
@@ -9,7 +9,7 @@ from tqdm import tqdm
 import argparse
 
 
-# In[2]:
+# In[ ]:
 
 
 import sys; sys.argv=['']; del sys
@@ -17,7 +17,7 @@ import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 
-# In[3]:
+# In[ ]:
 
 
 parser = argparse.ArgumentParser(description='Training GCN on Cora/CiteSeer/PubMed Datasets')
@@ -27,13 +27,13 @@ parser = argparse.ArgumentParser(description='Training GCN on Cora/CiteSeer/PubM
 '''
 parser.add_argument('--dataset', type=str, default='reddit',
                     help='Dataset name: Cora/CiteSeer/PubMed')
-parser.add_argument('--nhid', type=int, default=128,
+parser.add_argument('--nhid', type=int, default=256,
                     help='Hidden state dimension')
 parser.add_argument('--epoch_num', type=int, default= 100,
                     help='Number of Epoch')
-parser.add_argument('--pool_num', type=int, default= 4,
+parser.add_argument('--pool_num', type=int, default= 5,
                     help='Number of Pool')
-parser.add_argument('--batch_num', type=int, default= 32,
+parser.add_argument('--batch_num', type=int, default= 10,
                     help='Maximum Batch Number')
 parser.add_argument('--batch_size', type=int, default=512,
                     help='size of output node in a batch')
@@ -47,13 +47,13 @@ parser.add_argument('--cuda', type=int, default=-1,
                     help='Avaiable GPU ID')
 
 
-# In[4]:
+# In[ ]:
 
 
 args = parser.parse_args()
 
 
-# In[5]:
+# In[ ]:
 
 
 class GraphConvolution(nn.Module):
@@ -66,6 +66,7 @@ class GraphConvolution(nn.Module):
         out = self.linear(x)
         return F.relu(torch.spmm(adj, out))
 
+
 class GCN(nn.Module):
     def __init__(self, nfeat, nhid, layers, dropout):
         super(GCN, self).__init__()
@@ -73,9 +74,12 @@ class GCN(nn.Module):
         self.nhid = nhid
         self.gcs = nn.ModuleList()
         self.gcs.append(GraphConvolution(nfeat,  nhid))
+        self.norms = nn.ModuleList()
+        self.norms.append(BatchNorm(nhid))
         self.dropout = nn.Dropout(dropout)
         for i in range(layers-1):
             self.gcs.append(GraphConvolution(nhid,  nhid))
+            self.norms.append(BatchNorm(nhid))
     def forward(self, x, adjs):
         for idx in range(len(self.gcs)):
             x = self.dropout(self.gcs[idx](x, adjs[idx]))
@@ -109,7 +113,7 @@ class SuGCN(nn.Module):
         return F.log_softmax(x, dim=1)
 
 
-# In[6]:
+# In[ ]:
 
 
 def fastgcn_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
@@ -159,18 +163,17 @@ def package_mxl(mxl, device):
     return [torch.sparse.FloatTensor(mx[0], mx[1], mx[2]).to(device) for mx in mxl]
 
 
-# In[7]:
+# In[ ]:
 
 
 if args.cuda != -1:
     device = torch.device("cuda:" + args.cuda)
 else:
     device = torch.device("cpu")
-# edges, labels, feat_data, num_classes, train_nodes, valid_nodes, test_nodes = load_data(args.dataset)
-edges, labels, feat_data, num_classes, train_nodes, valid_nodes, test_nodes = load_data('cora')
+edges, labels, feat_data, num_classes, train_nodes, valid_nodes, test_nodes = load_data(args.dataset)
 
 
-# In[8]:
+# In[ ]:
 
 
 adj_matrix = get_adj(edges, feat_data.shape[0])
@@ -184,7 +187,7 @@ else:
 labels    = torch.LongTensor(labels).to(device) 
 
 
-# In[9]:
+# In[ ]:
 
 
 if args.sample_method == 'ladies':
@@ -198,43 +201,48 @@ elif args.sample_method == 'full':
 # In[ ]:
 
 
-encoder = GCN(nfeat = feat_data.shape[1], nhid=args.nhid, layers=args.n_layers, dropout = 0.3).to(device)
-susage  = SuGCN(encoder = encoder, num_classes=num_classes, dropout=0.3, inp = feat_data.shape[1])
-susage.to(device)
-
-optimizer = optim.Adam(filter(lambda p : p.requires_grad, susage.parameters()))
+process_ids = np.arange(args.batch_num)
 samp_num_list = [64 for i in range(args.n_layers)]
+
+pool = mp.Pool(args.pool_num)
+jobs = prepare_data(pool, process_ids, train_nodes, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
 
 std_adjs, _, _ = default_sampler(_, _, _, 0, lap_matrix, args.n_layers)
 std_adjs = package_mxl(std_adjs, device)
-times = []
-res = []
-process_ids = np.arange(args.batch_num // 8)
-for _ in range(5):
-    pool = mp.Pool(args.pool_num)
-    jobs = prepare_data(pool, process_ids, train_nodes, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
-    for epoch in tqdm(np.arange(args.epoch_num)+1, desc='Training'):
+all_res = []
+for o_iter in range(5):
+    encoder = GCN(nfeat = feat_data.shape[1], nhid=args.nhid, layers=args.n_layers, dropout = 0.2).to(device)
+    susage  = SuGCN(encoder = encoder, num_classes=num_classes, dropout=0.5, inp = feat_data.shape[1])
+    susage.to(device)
+
+    optimizer = optim.Adam(filter(lambda p : p.requires_grad, susage.parameters()))
+    best_val = -1
+    best_tst = -1
+    cnt = 0
+    times = []
+    res   = []
+    for epoch in np.arange(args.epoch_num):
+        susage.train()
         train_data = [job.get() for job in jobs]
         pool.close()
         pool.join()
         pool = mp.Pool(args.pool_num)
         jobs = prepare_data(pool, process_ids, train_nodes, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
-        for _iter in np.arange(2):
-            for adjs, input_nodes, output_nodes in train_data:    
-                adjs = package_mxl(adjs, device)
-                optimizer.zero_grad()
-                t1 = time.time()
-                susage.train()
-                output = susage.forward(feat_data[input_nodes], adjs)
-                loss_train = F.cross_entropy(output, labels[output_nodes])
-                loss_train.backward()
-                optimizer.step()
-                times += [time.time() - t1]
-                del loss_train
-            torch.cuda.empty_cache()
-        if epoch % 5 == 0:
+        for adjs, input_nodes, output_nodes in train_data:    
+            adjs = package_mxl(adjs, device)
+            optimizer.zero_grad()
+            t1 = time.time()
+            susage.train()
+            output = susage.forward(feat_data[input_nodes], adjs)
+            loss_train = F.cross_entropy(output, labels[output_nodes])
+            loss_train.backward()
+            optimizer.step()
+            times += [time.time() - t1]
+            del loss_train
+        if epoch % 1 == 0:
             susage.eval()
             pred = susage.forward(feat_data, std_adjs)
+            
             trai_label = labels[train_nodes]
             trai_pred = pred[train_nodes].cpu().detach().numpy()
             trai_f1 = f1_score(np.argmax(trai_pred, axis=1), trai_label.cpu().detach().numpy(), average='micro')    
@@ -242,24 +250,39 @@ for _ in range(5):
             vald_label = labels[valid_nodes]
             vald_pred = pred[valid_nodes].cpu().detach().numpy()
             vald_f1 = f1_score(np.argmax(vald_pred, axis=1), vald_label.cpu().detach().numpy(), average='micro')
-
+            
             test_label = labels[test_nodes]
             test_pred = pred[test_nodes].cpu().detach().numpy()
             test_f1 = f1_score(np.argmax(test_pred, axis=1), test_label.cpu().detach().numpy(), average='micro')
-            res += [[trai_f1, epoch, 'train']]
-            res += [[vald_f1, epoch, 'valid']]
-            res += [[test_f1, epoch, 'test']]
+            
+            res += [[trai_f1, vald_f1, test_f1]]
+            if vald_f1 >= best_val + 1e-2:
+                best_val = vald_f1
+                best_tst = test_f1
+                cnt = 0
+            else:
+                cnt += 1
+            if cnt == 20:
+                break
+                
+    res = np.array(res)
+    plt.plot(res[:,0], label='train')
+    plt.plot(res[:,1], label='valid')
+    plt.plot(res[:,2], label='test')
+    best_batch = np.argmax(res[:,1])
+    plt.title("Test F1: %.3f, Time: %.3f, Batch Num: %.3f" % (res[:,2][best_batch], np.sum(times[:best_batch * args.batch_num]), best_batch * args.batch_num))
+    plt.legend()
+    plt.show()
+    for epoch, (trai_f1, vald_f1, test_f1) in enumerate(res):
+        all_res += [[trai_f1, epoch * args.batch_num, 'train']]
+        all_res += [[vald_f1, epoch * args.batch_num, 'valid']]
+        all_res += [[test_f1, epoch * args.batch_num, 'test']]
 
 
 # In[ ]:
 
 
-dt = pd.DataFrame(res, columns=['f1-score', 'batch', 'type'])
-
-
-# In[ ]:
-
-
+dt = pd.DataFrame(all_res, columns=['f1-score', 'batch', 'type'])
 sb.lineplot(data = dt, x='batch', y='f1-score', hue='type')
 plt.legend(loc='lower right')
 plt.show()
