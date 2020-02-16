@@ -11,7 +11,7 @@ This implementation is based on Pytorch We assume that you're using Python 3 wit
 
 - [Pytorch 1.0](https://pytorch.org/)
 - [gensim](https://github.com/RaRe-Technologies/gensim)
-- [networkx](hhttps://networkx.github.io/)
+- [networkx](https://networkx.github.io/)
 - [tqdm](https://github.com/tqdm/tqdm)
 - [numpy](https://numpy.org/)
 
