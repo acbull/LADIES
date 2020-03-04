@@ -36,7 +36,7 @@ Please consider citing the following paper when using our code for your applicat
 @inproceedings{ladies2019,
   title={Few-Shot Representation Learning for Out-Of-Vocabulary Words},
   author={Difan Zou and Ziniu Hu and Yewen Wang and Song Jiang and Yizhou Sun and Quanquan Gu},
-  booktitle={Advances in Neural Information Processing Systems 32: Annual Conference on Neural Information Processing Systems, NeurIPS 2019},
+  booktitle={Advances in Neural Information Processing Systems 32: Annual Conference on Neural Information Processing Systems, NeurIPS},
   year={2019}
 }
 ```
