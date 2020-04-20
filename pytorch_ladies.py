@@ -139,7 +139,7 @@ def ladies_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, dept
         #     row-select the lap_matrix (U) by previously sampled nodes
         U = lap_matrix[previous_nodes , :]
         #     Only use the upper layer's neighborhood to calculate the probability.
-        pi = np.array(np.sum(U, axis=0))[0]
+        pi = np.sum(U**2, axis=0)
         p = pi / np.sum(pi)
         s_num = np.min([np.sum(p > 0), samp_num_list[d]])
         #     sample the next layer's nodes based on the adaptively probability (p).
