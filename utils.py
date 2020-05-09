@@ -150,8 +150,8 @@ def load_data(dataset_str):
         for t in graph[s]:
             edges += [[s, t]]
         degrees[s] = len(graph[s])
-
-    return np.array(edges), degrees, labels, features,  idx_train, idx_val, idx_test
+    labels = np.argmax(labels, axis=1)
+    return np.array(edges), labels, features, np.max(labels)+1,  idx_train, idx_val, idx_test
 
 def load_cora():
     num_nodes = 2708
@@ -182,7 +182,7 @@ def load_cora():
     adj_lists = np.array(adj_lists)
     return feat_data, labels, adj_lists, np.array(degrees)
 
-def normalize(mx):
+def sym_normalize(mx):
     """Sym-normalize sparse matrix"""
     rowsum = np.array(mx.sum(1))
     r_inv = np.power(rowsum, -1/2).flatten()
@@ -197,7 +197,8 @@ def normalize(mx):
     mx = r_mat_inv.dot(mx).dot(c_mat_inv)
     return mx
 
-def row_norm(mx):
+def row_normalize(mx):
+    """Row-normalize sparse matrix"""
     rowsum = np.array(mx.sum(1))
     r_inv = np.power(rowsum, -1).flatten()
     r_inv[np.isinf(r_inv)] = 0.
@@ -229,15 +230,6 @@ def get_sparse(edges, num_nodes):
     adj = normalize(adj + sp.eye(adj.shape[0]))
     return sparse_mx_to_torch_sparse_tensor(adj) 
 
-def normalize(mx):
-    """Row-normalize sparse matrix"""
-    rowsum = np.array(mx.sum(1))
-    r_inv = np.power(rowsum, -1).flatten()
-    r_inv[np.isinf(r_inv)] = 0.
-    r_mat_inv = sp.diags(r_inv)
-    mx = r_mat_inv.dot(mx)
-    return mx
-
 def norm(l):
     return (l - np.average(l)) / np.std(l)
 
@@ -262,5 +254,5 @@ def get_adj(edges, num_nodes):
                     shape=(num_nodes, num_nodes), dtype=np.float32)
     return adj + adj.T.multiply(adj.T > adj) - adj.multiply(adj.T > adj)
 def get_laplacian(adj):
-    adj = normalize(adj + sp.eye(adj.shape[0]))
+    adj = row_normalize(adj + sp.eye(adj.shape[0]))
     return sparse_mx_to_torch_sparse_tensor(adj) 

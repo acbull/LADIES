@@ -5,9 +5,9 @@
 from utils import *
 from tqdm import tqdm
 import argparse
+import scipy
+import multiprocessing as mp
 
-
-import sys; sys.argv=['']; del sys
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -88,7 +88,7 @@ class SuGCN(nn.Module):
         x = self.encoder(feat, adjs)
         x = self.dropout(x)
         x = self.linear(x)
-        return F.log_softmax(x, dim=1)
+        return x
 
 
 
@@ -101,7 +101,7 @@ def fastgcn_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, dep
     previous_nodes = batch_nodes
     adjs  = []
     #     pre-compute the sampling probability (importance) based on the global degree (lap_matrix)
-    pi = np.array(np.sum(lap_matrix, axis=0))[0]
+    pi = np.array(np.sum(lap_matrix.multiply(lap_matrix), axis=0))[0]
     p = pi / np.sum(pi)
     '''
         Sample nodes from top to bottom, based on the pre-computed probability. Then reconstruct the adjacency matrix.
@@ -139,7 +139,7 @@ def ladies_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, dept
         #     row-select the lap_matrix (U) by previously sampled nodes
         U = lap_matrix[previous_nodes , :]
         #     Only use the upper layer's neighborhood to calculate the probability.
-        pi = np.array(np.sum(U, axis=0))[0]
+        pi = np.array(np.sum(U.multiply(U), axis=0))[0]
         p = pi / np.sum(pi)
         s_num = np.min([np.sum(p > 0), samp_num_list[d]])
         #     sample the next layer's nodes based on the adaptively probability (p).
@@ -179,16 +179,14 @@ if args.cuda != -1:
     device = torch.device("cuda:" + str(args.cuda))
 else:
     device = torch.device("cpu")
-edges, labels, feat_data, num_classes, train_nodes, valid_nodes, test_nodes = load_data('reddit')
-
-
+    
+    
+print(args.dataset, args.sample_method)
+edges, labels, feat_data, num_classes, train_nodes, valid_nodes, test_nodes = load_data(args.dataset)
 
 adj_matrix = get_adj(edges, feat_data.shape[0])
-'''
-     Pre-compute the squared_laplacian matrix for estimating sampling probability.
-'''
+
 lap_matrix = row_normalize(adj_matrix + sp.eye(adj_matrix.shape[0]))
-lap_matrix = lap_matrix.multiply(lap_matrix)
 if type(feat_data) == scipy.sparse.lil.lil_matrix:
     feat_data = torch.FloatTensor(feat_data.todense()).to(device) 
 else:
@@ -202,30 +200,30 @@ if args.sample_method == 'ladies':
 elif args.sample_method == 'fastgcn':
     sampler = fastgcn_sampler
 elif args.sample_method == 'full':
-    sampler = default_sample
+    sampler = default_sampler
 
 
 # In[ ]:
 
 
 process_ids = np.arange(args.batch_num)
-samp_num_list = np.array([args.batch_size, args.batch_size, args.batch_size, args.batch_size, args.batch_size])
+samp_num_list = np.array([args.samp_num, args.samp_num, args.samp_num, args.samp_num, args.samp_num])
 
 pool = mp.Pool(args.pool_num)
 jobs = prepare_data(pool, sampler, process_ids, train_nodes, valid_nodes, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
 
 all_res = []
-encoder = GCN(nfeat = feat_data.shape[1], nhid=args.nhid, layers=args.n_layers, dropout = 0.2).to(device)
-susage  = SuGCN(encoder = encoder, num_classes=num_classes, dropout=0.5, inp = feat_data.shape[1])
-susage.to(device)
-
-optimizer = optim.Adam(filter(lambda p : p.requires_grad, susage.parameters()))
-best_val = 0
-best_tst = -1
-cnt = 0
-times = []
-res   = []
 for oiter in range(5):
+    encoder = GCN(nfeat = feat_data.shape[1], nhid=args.nhid, layers=args.n_layers, dropout = 0.2).to(device)
+    susage  = SuGCN(encoder = encoder, num_classes=num_classes, dropout=0.5, inp = feat_data.shape[1])
+    susage.to(device)
+
+    optimizer = optim.Adam(filter(lambda p : p.requires_grad, susage.parameters()))
+    best_val = 0
+    best_tst = -1
+    cnt = 0
+    times = []
+    res   = []
     print('-' * 10)
     for epoch in np.arange(args.epoch_num):
         susage.train()
@@ -246,6 +244,8 @@ for oiter in range(5):
                 t1 = time.time()
                 susage.train()
                 output = susage.forward(feat_data[input_nodes], adjs)
+                if args.sample_method == 'full':
+                    output = output[output_nodes]
                 loss_train = F.cross_entropy(output, labels[output_nodes])
                 loss_train.backward()
                 torch.nn.utils.clip_grad_norm_(susage.parameters(), 0.2)
@@ -257,16 +257,17 @@ for oiter in range(5):
         adjs, input_nodes, output_nodes = valid_data
         adjs = package_mxl(adjs, device)
         output = susage.forward(feat_data[input_nodes], adjs)
+        if args.sample_method == 'full':
+            output = output[output_nodes]
         loss_valid = F.cross_entropy(output, labels[output_nodes]).detach().tolist()
         valid_f1 = f1_score(output.argmax(dim=1).cpu(), labels[output_nodes].cpu(), average='micro')
         print(("Epoch: %d (%.1fs) Train Loss: %.2f    Valid Loss: %.2f Valid F1: %.3f") %                   (epoch, np.sum(times), np.average(train_losses), loss_valid, valid_f1))
         if valid_f1 > best_val + 1e-2:
             best_val = valid_f1
+            torch.save(susage, './save/best_model.pt')
             cnt = 0
         else:
             cnt += 1
-        if valid_f1 > best_val:
-            torch.save(susage, './save/best_model.pt')
         if cnt == args.n_stops // args.batch_num:
             break
     best_model = torch.load('./save/best_model.pt')
@@ -274,14 +275,13 @@ for oiter in range(5):
     test_f1s = []
     for b in np.arange(len(test_nodes) // args.batch_size):
         batch_nodes = test_nodes[b * args.batch_size : (b+1) * args.batch_size]
-        adjs, input_nodes, output_nodes = sampler(np.random.randint(2**32 - 1), batch_nodes,
+        adjs, input_nodes, output_nodes = default_sampler(np.random.randint(2**32 - 1), batch_nodes,
                                     samp_num_list * 20, len(feat_data), lap_matrix, args.n_layers)
         adjs = package_mxl(adjs, device)
-        output = best_model.forward(feat_data[input_nodes], adjs)
-        loss_test = F.cross_entropy(output, labels[output_nodes]).cpu().detach().tolist()
+        output = best_model.forward(feat_data[input_nodes], adjs)[output_nodes]
         test_f1 = f1_score(output.argmax(dim=1).cpu(), labels[output_nodes].cpu(), average='micro')
         test_f1s += [test_f1]
-    print('Iteration: %d, Test F1: %.3f' % (oiter, np.average(test_f1)))
+    print('Iteration: %d, Test F1: %.3f' % (oiter, np.average(test_f1s)))
 
 '''
     Visualize the train-test curve
