@@ -32,7 +32,7 @@ parser.add_argument('--batch_size', type=int, default=512,
                     help='size of output node in a batch')
 parser.add_argument('--n_layers', type=int, default=5,
                     help='Number of GCN layers')
-parser.add_argument('--n_iters', type=int, default=2,
+parser.add_argument('--n_iters', type=int, default=1,
                     help='Number of iteration to run on a batch')
 parser.add_argument('--n_stops', type=int, default=200,
                     help='Stop after number of batches that f1 dont increase')
