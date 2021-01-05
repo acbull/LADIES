@@ -273,14 +273,29 @@ for oiter in range(5):
     best_model = torch.load('./save/best_model.pt')
     best_model.eval()
     test_f1s = []
-    for b in np.arange(len(test_nodes) // args.batch_size):
-        batch_nodes = test_nodes[b * args.batch_size : (b+1) * args.batch_size]
-        adjs, input_nodes, output_nodes = default_sampler(np.random.randint(2**32 - 1), batch_nodes,
+    
+    '''
+    If using batch sampling for inference:
+    '''
+    #     for b in np.arange(len(test_nodes) // args.batch_size):
+    #         batch_nodes = test_nodes[b * args.batch_size : (b+1) * args.batch_size]
+    #         adjs, input_nodes, output_nodes = sampler(np.random.randint(2**32 - 1), batch_nodes,
+    #                                     samp_num_list * 20, len(feat_data), lap_matrix, args.n_layers)
+    #         adjs = package_mxl(adjs, device)
+    #         output = best_model.forward(feat_data[input_nodes], adjs)[output_nodes]
+    #         test_f1 = f1_score(output.argmax(dim=1).cpu(), labels[output_nodes].cpu(), average='micro')
+    #         test_f1s += [test_f1]
+    
+    '''
+    If using full-batch inference:
+    '''
+    batch_nodes = test_nodes
+    adjs, input_nodes, output_nodes = default_sampler(np.random.randint(2**32 - 1), batch_nodes,
                                     samp_num_list * 20, len(feat_data), lap_matrix, args.n_layers)
-        adjs = package_mxl(adjs, device)
-        output = best_model.forward(feat_data[input_nodes], adjs)[output_nodes]
-        test_f1 = f1_score(output.argmax(dim=1).cpu(), labels[output_nodes].cpu(), average='micro')
-        test_f1s += [test_f1]
+    adjs = package_mxl(adjs, device)
+    output = best_model.forward(feat_data[input_nodes], adjs)[output_nodes]
+    test_f1s = [f1_score(output.argmax(dim=1).cpu(), labels[output_nodes].cpu(), average='micro')]
+    
     print('Iteration: %d, Test F1: %.3f' % (oiter, np.average(test_f1s)))
 
 '''
