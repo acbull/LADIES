@@ -34,7 +34,7 @@ Please consider citing the following paper when using our code for your applicat
 
 ```
 @inproceedings{ladies2019,
-  title={Few-Shot Representation Learning for Out-Of-Vocabulary Words},
+  title={Layer-Dependent Importance Sampling for Training Deep and Large Graph Convolutional Networks},
   author={Difan Zou and Ziniu Hu and Yewen Wang and Song Jiang and Yizhou Sun and Quanquan Gu},
   booktitle={Advances in Neural Information Processing Systems 32: Annual Conference on Neural Information Processing Systems, NeurIPS},
   year={2019}
